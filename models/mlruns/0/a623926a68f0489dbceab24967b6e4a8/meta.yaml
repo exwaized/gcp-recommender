@@ -1,0 +1,14 @@
+artifact_uri: file:///home/claude/gcp-recommender/models/mlruns/0/a623926a68f0489dbceab24967b6e4a8/artifacts
+end_time: 1778930082731
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: a623926a68f0489dbceab24967b6e4a8
+run_name: als_train_20260516_1644
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1778930067245
+status: 3
+tags: []
+user_id: Victus

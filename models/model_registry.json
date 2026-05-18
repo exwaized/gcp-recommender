@@ -1,0 +1,11 @@
+{
+  "model_name": "collaborative_filter_v1",
+  "run_id": "1d63430a70d74cfab93d23c1710e8f13",
+  "trained_at": "2026-05-16T10:22:45.811039",
+  "metrics": {
+    "avg_recs_per_user": 10.0,
+    "factors": 32
+  },
+  "artifact_path": "/home/claude/gcp-recommender/models/als_model.pkl",
+  "status": "PRODUCTION"
+}

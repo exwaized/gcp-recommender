@@ -220,12 +220,11 @@ def train_and_register():
     
     return model
 
-def load_model() -> CollaborativeFilteringModel:
-    model_path = os.path.join(MODEL_DIR, "als_model.pkl")
-    if not os.path.exists(model_path):
-        raise FileNotFoundError("Model not trained yet. Run train.py first.")
-    with open(model_path, "rb") as f:
-        return pickle.load(f)
+def load_model():
+    save_dir = os.path.join(MODEL_DIR, "saved_model")
+    if not os.path.exists(save_dir):
+        raise FileNotFoundError("Model not trained yet. Run: python models/train.py")
+    return CollaborativeFilteringModel.load(save_dir)
 
 if __name__ == "__main__":
     train_and_register()

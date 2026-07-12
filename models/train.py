@@ -129,7 +129,7 @@ class CollaborativeFilteringModel:
         model.item_meta = meta["item_meta"]
         return model
 
-    def recommend(self, user_id, n=10):
+    def recommend(self, user_id, n=10, exclude_seen=True):
         if user_id not in self.user_index:
             return self._popular_fallback(n)
         u_idx = self.user_index[user_id]

@@ -125,10 +125,10 @@ def load_to_warehouse(users_df, items_df, interactions_df):
     conn.close()
     log.info(f"Loaded {len(users_df)} users, {len(items_df)} items, {len(interactions_df)} interactions → warehouse.db")
 
-def query_warehouse(sql: str) -> pd.DataFrame:
+def query_warehouse(sql: str, params: dict = None) -> pd.DataFrame:
     """Drop-in replacement for bigquery.Client().query(sql).to_dataframe()"""
     conn = _get_conn()
-    df = pd.read_sql_query(sql, conn)
+    df = pd.read_sql_query(sql, conn, params=params)
     conn.close()
     return df
 

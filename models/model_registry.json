@@ -1,11 +1,24 @@
 {
   "model_name": "collaborative_filter_v1",
-  "run_id": "1d63430a70d74cfab93d23c1710e8f13",
-  "trained_at": "2026-05-16T10:22:45.811039",
+  "run_id": "d6a7043be1924a6b8721fc988bf41e4a",
+  "trained_at": "2026-09-08T23:53:51.744469",
   "metrics": {
     "avg_recs_per_user": 10.0,
     "factors": 32
   },
-  "artifact_path": "/home/claude/gcp-recommender/models/als_model.pkl",
-  "status": "PRODUCTION"
+  "artifact_path": "E:\\gcp-recommende\\gcp-recommender\\models\\saved_model",
+  "status": "PRODUCTION",
+  "history": [
+    {
+      "model_name": "collaborative_filter_v1",
+      "run_id": "433d5448a26249079235ce2cb8860ef2",
+      "trained_at": "2026-05-18T17:42:22.040915",
+      "metrics": {
+        "avg_recs_per_user": 10.0,
+        "factors": 32
+      },
+      "artifact_path": "E:\\gcp-recommender\\gcp-recommender\\models\\saved_model",
+      "status": "ARCHIVED"
+    }
+  ]
 }

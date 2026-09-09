@@ -1,0 +1,13 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+runcmd:
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker ubuntu
+  # OCI's default security list on the always-free image also has an iptables
+  # firewall on the instance itself — open the app port there too.
+  - iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+  - netfilter-persistent save || true

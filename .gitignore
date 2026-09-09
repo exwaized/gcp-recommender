@@ -1,0 +1,9 @@
+.env
+wallet/
+*.pem
+__pycache__/
+*.pyc
+venv/
+.venv/
+monitoring/metrics.db
+.understand-anything/

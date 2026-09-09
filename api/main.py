@@ -1,8 +1,9 @@
 """
-FastAPI prediction server — Cloud Run deployable.
-Mirrors Vertex AI Prediction endpoint contract.
+FastAPI prediction server — deployable via Docker to any host.
+/predict mirrors the Vertex AI Prediction endpoint contract for reference.
 Run locally: uvicorn api.main:app --reload --port 8080
-On GCP: containerize via Dockerfile, deploy to Cloud Run
+Real deployment: containerize via Dockerfile, run on an Oracle Cloud
+Always-Free compute instance (see README > Oracle Cloud deployment).
 """
 import os
 import sys
@@ -21,10 +22,19 @@ from pydantic import BaseModel
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from models.train import load_model, CollaborativeFilteringModel
-from data.generate_data import query_warehouse, DB_PATH
+from data.warehouse import query_warehouse, paginate_clause, backend_name
 from monitoring.logger import StructuredLogger
+from monitoring.metrics import MetricsCollector
 
 log = StructuredLogger("api")
+metrics = MetricsCollector()
+
+# Wide open by default so the React dashboard — served from a claude.ai
+# artifact origin, not localhost — can call this API during local/demo use.
+# Set CORS_ALLOW_ORIGINS to a comma-separated list before exposing this
+# beyond a demo (e.g. "https://claude.ai,http://localhost:5173").
+_cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
+CORS_ORIGINS = ["*"] if _cors_origins_env == "*" else [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
 
 # ---- Global model state ----
 model: Optional[CollaborativeFilteringModel] = None
@@ -52,7 +62,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"]
 )
@@ -79,6 +89,9 @@ async def log_requests(request: Request, call_next):
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
     log.info("request", method=request.method, path=request.url.path,
              status=response.status_code, latency_ms=latency_ms)
+    metrics.record("request_latency_ms", latency_ms, {
+        "path": request.url.path, "method": request.method, "status": response.status_code
+    })
     return response
 
 # ---- Health & Status ----
@@ -87,7 +100,16 @@ def health():
     return {
         "status": "healthy" if model else "degraded",
         "model_loaded": model is not None,
+        "warehouse_backend": backend_name(),
         "timestamp": datetime.utcnow().isoformat()
+    }
+
+@app.get("/metrics")
+def get_metrics():
+    """Cloud Monitoring-equivalent read path: recent samples + a rollup of request latency."""
+    return {
+        "request_latency_ms": metrics.get_summary("request_latency_ms"),
+        "recent": metrics.get_all_metrics()
     }
 
 @app.get("/model/info")
@@ -134,21 +156,21 @@ def predict(req: PredictRequest):
 # ---- Data endpoints (BigQuery equivalent) ----
 @app.get("/users")
 def list_users(limit: int = 20, offset: int = 0):
-    df = query_warehouse(f"SELECT * FROM users LIMIT {limit} OFFSET {offset}")
+    df = query_warehouse(f"SELECT * FROM users ORDER BY user_id {paginate_clause(limit, offset)}")
     total = query_warehouse("SELECT COUNT(*) as c FROM users")["c"][0]
     return {"users": df.to_dict("records"), "total": int(total)}
 
 @app.get("/users/{user_id}")
 def get_user(user_id: str):
-    df = query_warehouse(f"SELECT * FROM users WHERE user_id = '{user_id}'")
+    df = query_warehouse("SELECT * FROM users WHERE user_id = :user_id", {"user_id": user_id})
     if df.empty:
         raise HTTPException(404, f"User {user_id} not found")
     history = query_warehouse(f"""
         SELECT i.event_type, i.timestamp, it.title, it.category, it.price
         FROM interactions i JOIN items it ON i.item_id = it.item_id
-        WHERE i.user_id = '{user_id}'
-        ORDER BY i.timestamp DESC LIMIT 20
-    """)
+        WHERE i.user_id = :user_id
+        ORDER BY i.timestamp DESC {paginate_clause(20, 0)}
+    """, {"user_id": user_id})
     return {
         "user": df.to_dict("records")[0],
         "recent_interactions": history.to_dict("records")
@@ -156,8 +178,13 @@ def get_user(user_id: str):
 
 @app.get("/items")
 def list_items(category: Optional[str] = None, limit: int = 20):
-    where = f"WHERE category = '{category}'" if category else ""
-    df = query_warehouse(f"SELECT * FROM items {where} LIMIT {limit}")
+    if category:
+        df = query_warehouse(
+            f"SELECT * FROM items WHERE category = :category {paginate_clause(limit, 0)}",
+            {"category": category}
+        )
+    else:
+        df = query_warehouse(f"SELECT * FROM items {paginate_clause(limit, 0)}")
     return {"items": df.to_dict("records")}
 
 @app.get("/analytics/summary")

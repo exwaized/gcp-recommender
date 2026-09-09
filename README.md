@@ -39,18 +39,40 @@ uvicorn api.main:app --port 8080  # Serve predictions
 | `/similar-items` | POST | Item-to-item similarity |
 | `/predict` | POST | Vertex AI-compatible batch prediction |
 | `/analytics/summary` | GET | Dataset statistics |
+| `/metrics` | GET | Request latency rollup + recent samples (Cloud Monitoring-equivalent) |
 | `/model/info` | GET | MLflow registry entry |
 | `/docs` | GET | Auto-generated Swagger UI |
 
-## GCP Production Swap Guide
+## Cloud Production Swap Guide
 
-| Local component | GCP equivalent | Swap |
-|----------------|----------------|------|
-| SQLite (`warehouse.db`) | BigQuery | Replace `query_warehouse()` with `bigquery.Client().query().to_dataframe()` |
-| MLflow registry | Vertex AI Model Registry | Replace `mlflow.log_artifact()` with `aiplatform.Model.upload()` |
-| uvicorn FastAPI | Cloud Run | `gcloud run deploy` from Dockerfile |
-| Structured JSON logs | Cloud Logging | `google.cloud.logging.Client().setup_logging()` |
-| Local metrics DB | Cloud Monitoring | `monitoring_v3.MetricServiceClient` |
+The original design targeted GCP (BigQuery / Vertex AI / Cloud Run). The actual
+live deployment runs on **Oracle Cloud's Always-Free tier** instead, since it
+doesn't require a billing account — but the swap points are the same idea:
+
+| Local component | Oracle Cloud (implemented) | GCP equivalent (not deployed) |
+|----------------|------------------------------|--------------------------------|
+| SQLite (`warehouse.db`) | Oracle Autonomous Database — `data/oracle_warehouse.py`, toggled via `WAREHOUSE_BACKEND=oracle` | BigQuery |
+| MLflow registry | Same MLflow local file store, on the compute instance | Vertex AI Model Registry |
+| uvicorn FastAPI | Docker container on a `VM.Standard.A1.Flex` Always-Free instance | Cloud Run |
+| Structured JSON logs | stdout, same format (no managed sink wired up) | Cloud Logging |
+| Local metrics DB | unchanged (SQLite, on-instance) | Cloud Monitoring |
+
+### Oracle Cloud deployment
+
+1. **Sign up** at [cloud.oracle.com/free](https://cloud.oracle.com/free) (Always Free tier — no time limit, no charge unless you upgrade).
+2. **Set up the CLI**: generate an API signing key (Console → Profile → User Settings → API Keys), install the OCI CLI, then run `oci setup config`.
+3. **Provision resources**: edit the variables at the top of `scripts/oci_provision.sh` (compartment OCID, region, SSH key, DB admin password), then run it. It creates a VCN/subnet/security list, an Always-Free Autonomous Database (DW workload), and an Always-Free `VM.Standard.A1.Flex` compute instance (4 OCPU / 24GB, Ubuntu, Docker pre-installed via cloud-init).
+4. **Get DB connection info**: in the console, open the Autonomous Database → DB Connection → TLS tab (not the wallet/mTLS tab) and copy the connect descriptor into `ORACLE_CONNECT_STRING`. Copy `.env.example` to `.env` and fill in `ORACLE_USER` / `ORACLE_PASSWORD` / `ORACLE_CONNECT_STRING`.
+5. **Ship the code to the instance** (`scp`/`rsync` the repo, or `git clone` if pushed to a remote), then on the VM:
+   ```bash
+   pip install -r requirements.txt   # or run these two steps in a venv
+   WAREHOUSE_BACKEND=oracle python scripts/seed_warehouse.py   # loads synthetic data into ADB
+   WAREHOUSE_BACKEND=oracle python models/train.py             # trains ALS against real ADB data
+   docker build -t gcp-recommender .
+   docker run -d -p 8080:8080 --env-file .env -e WAREHOUSE_BACKEND=oracle \
+     -v $(pwd)/models/saved_model:/app/models/saved_model gcp-recommender
+   ```
+6. **Verify**: `curl http://<instance-public-ip>:8080/health` should report `"warehouse_backend": "oracle"`.
 
 ## Model Details
 

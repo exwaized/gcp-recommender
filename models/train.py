@@ -11,7 +11,7 @@ import scipy.sparse as sp
 import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from data.generate_data import query_warehouse
+from data.warehouse import query_warehouse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -157,8 +157,11 @@ class CollaborativeFilteringModel:
         if item_id not in self.item_index:
             return []
         idx = self.item_index[item_id]
+        norms = np.linalg.norm(self.item_factors, axis=1)
         vec = self.item_factors[idx]
-        sims = self.item_factors @ vec
+        if norms[idx] == 0:
+            return []
+        sims = (self.item_factors @ vec) / (norms * norms[idx] + 1e-10)
         sims[idx] = -999
         top_idx = np.argsort(sims)[::-1][:n]
         results = []
@@ -177,6 +180,28 @@ class CollaborativeFilteringModel:
     def _popular_fallback(self, n):
         items = sorted(self.item_meta.items(), key=lambda x: x[1].get("avg_rating", 0), reverse=True)
         return [{"item_id": k, **v, "score": 0.0} for k, v in items[:n]]
+
+
+def _archive_previous_registry(registry_path):
+    """Reads the outgoing model_registry.json (if any) and returns it as a
+    history list with its status downgraded from PRODUCTION, so retraining
+    doesn't erase the record of what was serving before it."""
+    if not os.path.exists(registry_path):
+        return []
+    with open(registry_path) as f:
+        try:
+            previous = json.load(f)
+        except json.JSONDecodeError:
+            return []
+    history = previous.get("history", [])
+    prior_current = {k: previous[k] for k in
+                      ("model_name", "run_id", "trained_at", "metrics", "artifact_path", "status")
+                      if k in previous}
+    if prior_current:
+        if prior_current.get("status") == "PRODUCTION":
+            prior_current["status"] = "ARCHIVED"
+        history.append(prior_current)
+    return history
 
 
 def train_and_register():
@@ -207,7 +232,7 @@ def train_and_register():
         model.save(save_dir)
         mlflow.log_artifact(save_dir)
 
-        registry = {
+        current = {
             "model_name": "collaborative_filter_v1",
             "run_id": run.info.run_id,
             "trained_at": datetime.now().isoformat(),
@@ -215,6 +240,7 @@ def train_and_register():
             "artifact_path": save_dir,
             "status": "PRODUCTION"
         }
+        registry = {**current, "history": _archive_previous_registry(REGISTRY_PATH)}
         with open(REGISTRY_PATH, "w") as f:
             json.dump(registry, f, indent=2)
 

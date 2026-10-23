@@ -30,6 +30,11 @@ python models/train.py          # Train ALS, register to MLflow
 uvicorn api.main:app --port 8080  # Serve predictions
 ```
 
+Every endpoint except `/health` requires an `X-API-Key` header matching the server's `API_KEY`.
+For local development without a key, start the server with `API_AUTH_DISABLED=1` (and
+`CORS_ALLOW_ORIGINS=*` if the dashboard runs from another origin). The dashboard has API URL and
+API key fields at the top; the key lives in memory only and is never stored in the source.
+
 ## API Endpoints
 
 | Endpoint | Method | Description |

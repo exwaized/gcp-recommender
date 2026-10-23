@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const API = "http://localhost:8080";
+const DEFAULT_API = "http://localhost:8080";
 
 const COLORS = {
   Electronics: "#378ADD", Books: "#1D9E75", Clothing: "#D4537E",
@@ -44,34 +44,53 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [apiStatus, setApiStatus] = useState("checking");
 
+  // The API requires an X-API-Key header. The key is entered at runtime and kept
+  // only in component state — never hard-code it in this file.
+  const [API, setApi] = useState(DEFAULT_API);
+  const [apiKey, setApiKey] = useState("");
+  const [connectNonce, setConnectNonce] = useState(0);
+
   const fetchJson = useCallback(async (url, opts = {}) => {
     try {
-      const r = await fetch(url, opts);
+      const r = await fetch(url, {
+        ...opts,
+        headers: { ...(opts.headers || {}), ...(apiKey ? { "X-API-Key": apiKey } : {}) }
+      });
+      if (r.status === 401 || r.status === 503) {
+        const e = new Error("unauthorized");
+        e.unauthorized = true;
+        throw e;
+      }
       if (!r.ok) throw new Error(r.statusText);
       return await r.json();
     } catch (e) {
+      if (e.unauthorized) setApiStatus("unauthorized");
       return null;
     }
-  }, []);
+  }, [apiKey]);
 
   useEffect(() => {
     (async () => {
+      setApiStatus("checking");
       const h = await fetchJson(`${API}/health`);
-      setApiStatus(h ? (h.status === "healthy" ? "online" : "degraded") : "offline");
-      if (h) {
-        const [s, u, it, mi] = await Promise.all([
-          fetchJson(`${API}/analytics/summary`),
-          fetchJson(`${API}/users?limit=50`),
-          fetchJson(`${API}/items?limit=50`),
-          fetchJson(`${API}/model/info`)
-        ]);
-        setSummary(s);
-        setUsers(u?.users || []);
-        setItems(it?.items || []);
-        setModelInfo(mi);
-      }
+      if (!h) { setApiStatus("offline"); return; }
+      const [s, u, it, mi] = await Promise.all([
+        fetchJson(`${API}/analytics/summary`),
+        fetchJson(`${API}/users?limit=50`),
+        fetchJson(`${API}/items?limit=50`),
+        fetchJson(`${API}/model/info`)
+      ]);
+      setSummary(s);
+      setUsers(u?.users || []);
+      setItems(it?.items || []);
+      setModelInfo(mi);
+      // fetchJson flags "unauthorized" itself; only mark online if data came back.
+      if (s || u || it || mi) setApiStatus(h.status === "healthy" ? "online" : "degraded");
+      else setApiStatus(prev => (prev === "unauthorized" ? prev : "no data"));
     })();
-  }, [fetchJson]);
+    // Re-run only when the user clicks Connect, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectNonce]);
 
   const fetchRecs = useCallback(async () => {
     setLoading(true);
@@ -82,7 +101,7 @@ export default function App() {
     });
     setRecs(data);
     setLoading(false);
-  }, [selectedUser, fetchJson]);
+  }, [selectedUser, fetchJson, API]);
 
   const fetchSimilar = useCallback(async () => {
     setLoading(true);
@@ -93,9 +112,9 @@ export default function App() {
     });
     setSimilarItems(data);
     setLoading(false);
-  }, [selectedItem, fetchJson]);
+  }, [selectedItem, fetchJson, API]);
 
-  const statusColor = { online: "var(--color-text-success)", offline: "var(--color-text-danger)", degraded: "var(--color-text-warning)", checking: "var(--color-text-secondary)" }[apiStatus];
+  const statusColor = { online: "var(--color-text-success)", offline: "var(--color-text-danger)", degraded: "var(--color-text-warning)", unauthorized: "var(--color-text-danger)", "no data": "var(--color-text-warning)", checking: "var(--color-text-secondary)" }[apiStatus];
 
   const TABS = [
     { id: "dashboard", label: "Overview", icon: "ti-chart-bar" },
@@ -119,6 +138,20 @@ export default function App() {
           <span style={{ color: statusColor, fontWeight: 500 }}>API {apiStatus}</span>
         </div>
       </div>
+
+      {/* Connection */}
+      <div style={{ display: "flex", gap: 8, marginBottom: "1rem", flexWrap: "wrap" }}>
+        <input value={API} onChange={e => setApi(e.target.value.replace(/\/+$/, ""))}
+          aria-label="API URL" placeholder="API URL" style={{ flex: "1 1 220px" }} />
+        <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+          aria-label="API key" placeholder="API key" autoComplete="off" style={{ flex: "1 1 180px" }} />
+        <button onClick={() => setConnectNonce(n => n + 1)}>Connect</button>
+      </div>
+      {apiStatus === "unauthorized" && (
+        <div style={{ fontSize: 12, color: "var(--color-text-danger)", marginBottom: "1rem" }}>
+          The API rejected the key (or has no API_KEY configured). Enter a valid key and press Connect.
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: 8 }}>

@@ -1,0 +1,29 @@
+# Production stack: the API is reachable only through Caddy (automatic HTTPS).
+# Requires .env with API_KEY, CORS_ALLOW_ORIGINS, DOMAIN and the ORACLE_* values.
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      WAREHOUSE_BACKEND: oracle
+    volumes:
+      - ./models/saved_model:/app/models/saved_model:ro
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy_data:

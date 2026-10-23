@@ -7,7 +7,9 @@ runcmd:
   - systemctl enable docker
   - systemctl start docker
   - usermod -aG docker ubuntu
-  # OCI's default security list on the always-free image also has an iptables
-  # firewall on the instance itself — open the app port there too.
-  - iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+  # OCI's always-free image also has an iptables firewall on the instance itself —
+  # open only the TLS proxy ports. 8080 stays closed; Caddy reaches the app over
+  # the compose network.
+  - iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+  - iptables -I INPUT -p tcp --dport 443 -j ACCEPT
   - netfilter-persistent save || true

@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Provisions the Always-Free OCI resources for this project:
-#   - VCN + public subnet + internet gateway + security list (22, 8080)
+#   - VCN + public subnet + internet gateway + security list
+#     (22 from ADMIN_CIDR only; 80/443 public for the Caddy TLS proxy; 8080 is NOT exposed)
 #   - Autonomous Database, Always Free, Data Warehouse workload
 #   - Compute instance, VM.Standard.A1.Flex (Ampere ARM, Always Free eligible)
 #
 # Prereqs: `oci setup config` already run (needs an OCI account + API signing key).
-# Fill in the variables below, then: bash scripts/oci_provision.sh
+# Secrets and your IP come from the environment, never from this file:
+#   export DB_ADMIN_PASSWORD='...'   # 12-30 chars, upper+lower+digit, no dictionary word
+#   export ADMIN_CIDR='203.0.113.7/32'   # your IP, for SSH
+# Fill in the remaining variables below, then: bash scripts/oci_provision.sh
 set -euo pipefail
 
 # ---- fill these in ----
 COMPARTMENT_ID="ocid1.tenancy.oc1..xxxxxxxx"   # or a sub-compartment OCID
 REGION="us-ashburn-1"
 SSH_PUBLIC_KEY_FILE="$HOME/.ssh/id_rsa.pub"
-DB_ADMIN_PASSWORD="ChangeMe123#"                # 12-30 chars, upper+lower+digit, no dictionary word
+DB_ADMIN_PASSWORD="${DB_ADMIN_PASSWORD:?set DB_ADMIN_PASSWORD in the environment}"
+ADMIN_CIDR="${ADMIN_CIDR:?set ADMIN_CIDR (your IP as x.x.x.x/32) for SSH access}"
 APP_NAME="recowarehouse"
 # ------------------------
 
@@ -37,13 +42,14 @@ RT_ID=$(oci network route-table list --compartment-id "$COMPARTMENT_ID" --vcn-id
 oci network route-table update --rt-id "$RT_ID" --force \
   --route-rules "[{\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\",\"networkEntityId\":\"$IG_ID\"}]" >/dev/null
 
-echo "== Network: security list (22, 8080 ingress) =="
+echo "== Network: security list (22 from $ADMIN_CIDR, 80/443 public) =="
 SL_ID=$(oci network security-list list --compartment-id "$COMPARTMENT_ID" --vcn-id "$VCN_ID" \
   --query "data[0].id" --raw-output)
 oci network security-list update --security-list-id "$SL_ID" --force \
   --ingress-security-rules '[
-    {"source":"0.0.0.0/0","protocol":"6","tcpOptions":{"destinationPortRange":{"min":22,"max":22}}},
-    {"source":"0.0.0.0/0","protocol":"6","tcpOptions":{"destinationPortRange":{"min":8080,"max":8080}}}
+    {"source":"'"$ADMIN_CIDR"'","protocol":"6","tcpOptions":{"destinationPortRange":{"min":22,"max":22}}},
+    {"source":"0.0.0.0/0","protocol":"6","tcpOptions":{"destinationPortRange":{"min":80,"max":80}}},
+    {"source":"0.0.0.0/0","protocol":"6","tcpOptions":{"destinationPortRange":{"min":443,"max":443}}}
   ]' \
   --egress-security-rules '[{"destination":"0.0.0.0/0","protocol":"all"}]' >/dev/null
 

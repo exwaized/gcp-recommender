@@ -47,8 +47,10 @@ if __name__ == "__main__":
     print("\n  Press Ctrl+C to stop\n")
     
     server = subprocess.Popen(
-        f"python -m uvicorn api.main:app --host 0.0.0.0 --port 8080",
-        shell=True, cwd=BASE
+        f"python -m uvicorn api.main:app --host 127.0.0.1 --port 8080",
+        shell=True, cwd=BASE,
+        # Local demo only: skip API-key auth and allow the dashboard origin.
+        env={**os.environ, "API_AUTH_DISABLED": "1", "CORS_ALLOW_ORIGINS": "*"}
     )
     
     if wait_for_api():

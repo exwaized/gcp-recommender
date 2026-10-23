@@ -1,0 +1,16 @@
+.git
+.github
+venv
+.venv
+.env
+wallet
+*.pem
+**/__pycache__
+*.pyc
+models/mlruns
+models/*.pkl
+models/*.joblib
+data/warehouse.db
+monitoring/metrics.db
+tests
+.understand-anything

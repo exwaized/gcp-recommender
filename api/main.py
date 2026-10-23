@@ -10,15 +10,16 @@ import sys
 import time
 import logging
 import json
-import sqlite3
-from datetime import datetime
+import hmac
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from models.train import load_model, CollaborativeFilteringModel
@@ -29,12 +30,29 @@ from monitoring.metrics import MetricsCollector
 log = StructuredLogger("api")
 metrics = MetricsCollector()
 
-# Wide open by default so the React dashboard — served from a claude.ai
-# artifact origin, not localhost — can call this API during local/demo use.
-# Set CORS_ALLOW_ORIGINS to a comma-separated list before exposing this
-# beyond a demo (e.g. "https://claude.ai,http://localhost:5173").
-_cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
-CORS_ORIGINS = ["*"] if _cors_origins_env == "*" else [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+# CORS is closed by default. Set CORS_ALLOW_ORIGINS to a comma-separated list
+# (e.g. "https://app.example.com,http://localhost:5173"); "*" must be asked for
+# explicitly and is for local demos only.
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
+
+# API-key auth. Fails closed: with no API_KEY set, protected endpoints return 503
+# unless API_AUTH_DISABLED=1 is set explicitly (local development / tests).
+API_KEY = os.getenv("API_KEY", "")
+AUTH_DISABLED = os.getenv("API_AUTH_DISABLED") == "1"
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+MAX_N = 100
+MAX_LIMIT = 200
+
+
+def require_api_key(key: Optional[str] = Depends(_api_key_header)):
+    if AUTH_DISABLED:
+        return
+    if not API_KEY:
+        raise HTTPException(503, "Server auth is not configured (set API_KEY)")
+    if not key or not hmac.compare_digest(key, API_KEY):
+        raise HTTPException(401, "Invalid or missing API key")
+
 
 # ---- Global model state ----
 model: Optional[CollaborativeFilteringModel] = None
@@ -42,6 +60,8 @@ model: Optional[CollaborativeFilteringModel] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model
+    if not API_KEY and not AUTH_DISABLED:
+        log.error("startup", message="API_KEY not set — protected endpoints will return 503")
     log.info("startup", message="Loading model from registry...")
     try:
         model = load_model()
@@ -69,17 +89,17 @@ app.add_middleware(
 
 # ---- Request/Response Models ----
 class RecommendRequest(BaseModel):
-    user_id: str
-    n: int = 10
+    user_id: str = Field(min_length=1, max_length=128)
+    n: int = Field(default=10, ge=1, le=MAX_N)
     exclude_seen: bool = True
 
 class SimilarItemsRequest(BaseModel):
-    item_id: str
-    n: int = 5
+    item_id: str = Field(min_length=1, max_length=128)
+    n: int = Field(default=5, ge=1, le=MAX_N)
 
 class PredictRequest(BaseModel):
     """Vertex AI prediction endpoint contract"""
-    instances: list[dict]
+    instances: list[dict] = Field(max_length=100)
 
 # ---- Middleware: request logging ----
 @app.middleware("http")
@@ -97,14 +117,15 @@ async def log_requests(request: Request, call_next):
 # ---- Health & Status ----
 @app.get("/health")
 def health():
-    return {
+    body = {
         "status": "healthy" if model else "degraded",
         "model_loaded": model is not None,
         "warehouse_backend": backend_name(),
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
+    return JSONResponse(body, status_code=200 if model else 503)
 
-@app.get("/metrics")
+@app.get("/metrics", dependencies=[Depends(require_api_key)])
 def get_metrics():
     """Cloud Monitoring-equivalent read path: recent samples + a rollup of request latency."""
     return {
@@ -112,7 +133,7 @@ def get_metrics():
         "recent": metrics.get_all_metrics()
     }
 
-@app.get("/model/info")
+@app.get("/model/info", dependencies=[Depends(require_api_key)])
 def model_info():
     registry_path = os.path.join(os.path.dirname(__file__), "../models/model_registry.json")
     if os.path.exists(registry_path):
@@ -121,7 +142,7 @@ def model_info():
     return {"status": "no registry found"}
 
 # ---- Prediction Endpoints ----
-@app.post("/recommend")
+@app.post("/recommend", dependencies=[Depends(require_api_key)])
 def recommend(req: RecommendRequest):
     if not model:
         raise HTTPException(503, "Model not loaded")
@@ -129,14 +150,14 @@ def recommend(req: RecommendRequest):
     log.info("recommend", user_id=req.user_id, n_results=len(recs))
     return {"user_id": req.user_id, "recommendations": recs, "count": len(recs)}
 
-@app.post("/similar-items")
+@app.post("/similar-items", dependencies=[Depends(require_api_key)])
 def similar_items(req: SimilarItemsRequest):
     if not model:
         raise HTTPException(503, "Model not loaded")
     similar = model.similar_items(req.item_id, n=req.n)
     return {"item_id": req.item_id, "similar_items": similar}
 
-@app.post("/predict")
+@app.post("/predict", dependencies=[Depends(require_api_key)])
 def predict(req: PredictRequest):
     """
     Vertex AI-compatible prediction endpoint.
@@ -148,19 +169,21 @@ def predict(req: PredictRequest):
     for instance in req.instances:
         uid = instance.get("user_id")
         n = instance.get("n", 10)
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= MAX_N:
+            raise HTTPException(422, f"n must be an integer between 1 and {MAX_N}")
         if uid:
             recs = model.recommend(uid, n=n)
             predictions.append({"user_id": uid, "recommendations": recs})
     return {"predictions": predictions}
 
 # ---- Data endpoints (BigQuery equivalent) ----
-@app.get("/users")
-def list_users(limit: int = 20, offset: int = 0):
+@app.get("/users", dependencies=[Depends(require_api_key)])
+def list_users(limit: int = Query(20, ge=1, le=MAX_LIMIT), offset: int = Query(0, ge=0)):
     df = query_warehouse(f"SELECT * FROM users ORDER BY user_id {paginate_clause(limit, offset)}")
     total = query_warehouse("SELECT COUNT(*) as c FROM users")["c"][0]
     return {"users": df.to_dict("records"), "total": int(total)}
 
-@app.get("/users/{user_id}")
+@app.get("/users/{user_id}", dependencies=[Depends(require_api_key)])
 def get_user(user_id: str):
     df = query_warehouse("SELECT * FROM users WHERE user_id = :user_id", {"user_id": user_id})
     if df.empty:
@@ -176,8 +199,8 @@ def get_user(user_id: str):
         "recent_interactions": history.to_dict("records")
     }
 
-@app.get("/items")
-def list_items(category: Optional[str] = None, limit: int = 20):
+@app.get("/items", dependencies=[Depends(require_api_key)])
+def list_items(category: Optional[str] = None, limit: int = Query(20, ge=1, le=MAX_LIMIT)):
     if category:
         df = query_warehouse(
             f"SELECT * FROM items WHERE category = :category {paginate_clause(limit, 0)}",
@@ -187,7 +210,7 @@ def list_items(category: Optional[str] = None, limit: int = 20):
         df = query_warehouse(f"SELECT * FROM items {paginate_clause(limit, 0)}")
     return {"items": df.to_dict("records")}
 
-@app.get("/analytics/summary")
+@app.get("/analytics/summary", dependencies=[Depends(require_api_key)])
 def analytics_summary():
     stats = {}
     stats["total_users"] = int(query_warehouse("SELECT COUNT(*) as c FROM users")["c"][0])
@@ -206,4 +229,4 @@ def analytics_summary():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("api.main:app", host="127.0.0.1", port=8080)

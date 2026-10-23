@@ -11,8 +11,14 @@ Connection modes (picked automatically from env vars):
      to the TNS alias (e.g. "recowarehouse_high") from that wallet's tnsnames.ora.
 
 Either way, ORACLE_USER / ORACLE_PASSWORD must be set.
+
+Least privilege: the API and training only read. Run them as a dedicated user
+created by scripts/create_app_user.py (SELECT-only) and set ORACLE_SCHEMA to the
+schema that owns the tables (ADMIN), so unqualified table names resolve. Only
+scripts/seed_warehouse.py needs the owner/ADMIN credentials.
 """
 import os
+import re
 import logging
 import pandas as pd
 import oracledb
@@ -52,12 +58,24 @@ SCHEMA = {
 ORA_NAME_IN_USE = 955  # ORA-00955: name is already used by an existing object
 
 
+_IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]{0,127}$")
+
+
 def _get_conn():
     user = os.environ["ORACLE_USER"]
     password = os.environ["ORACLE_PASSWORD"]
     connect_string = os.getenv("ORACLE_CONNECT_STRING")
     dsn = connect_string or os.environ["ORACLE_DSN"]
-    return oracledb.connect(user=user, password=password, dsn=dsn)
+    conn = oracledb.connect(user=user, password=password, dsn=dsn)
+    schema = os.getenv("ORACLE_SCHEMA")
+    if schema:
+        if not _IDENT.match(schema):
+            conn.close()
+            raise ValueError(f"Invalid ORACLE_SCHEMA: {schema!r}")
+        cur = conn.cursor()
+        cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {schema}")
+        cur.close()
+    return conn
 
 
 def _ensure_schema(conn):

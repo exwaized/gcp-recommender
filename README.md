@@ -62,11 +62,13 @@ doesn't require a billing account — but the swap points are the same idea:
 1. **Sign up** at [cloud.oracle.com/free](https://cloud.oracle.com/free) (Always Free tier — no time limit, no charge unless you upgrade).
 2. **Set up the CLI**: generate an API signing key (Console → Profile → User Settings → API Keys), install the OCI CLI, then run `oci setup config`.
 3. **Provision resources**: export `DB_ADMIN_PASSWORD` and `ADMIN_CIDR` (your IP as `x.x.x.x/32`, the only address allowed to SSH in), edit the compartment OCID / region / SSH key at the top of `scripts/oci_provision.sh`, then run it. It creates a VCN/subnet/security list, an Always-Free Autonomous Database (DW workload), and an Always-Free `VM.Standard.A1.Flex` compute instance (4 OCPU / 24GB, Ubuntu, Docker pre-installed via cloud-init).
-4. **Get DB connection info**: in the console, open the Autonomous Database → DB Connection → TLS tab (not the wallet/mTLS tab) and copy the connect descriptor into `ORACLE_CONNECT_STRING`. Copy `.env.example` to `.env` and fill in `ORACLE_USER` / `ORACLE_PASSWORD` / `ORACLE_CONNECT_STRING`, plus `API_KEY` and `CORS_ALLOW_ORIGINS`. Also add `DOMAIN=<your hostname>` (point its DNS A record at the instance's public IP first; Caddy needs it to get a certificate).
+4. **Get DB connection info**: in the console, open the Autonomous Database → DB Connection → TLS tab (not the wallet/mTLS tab) and copy the connect descriptor into `ORACLE_CONNECT_STRING`. Copy `.env.example` to `.env` and fill in `ORACLE_CONNECT_STRING` and the runtime user (`ORACLE_USER=RECO_APP`, `ORACLE_PASSWORD`, `ORACLE_SCHEMA=ADMIN`; created in step 5, not `ADMIN`), plus `API_KEY` and `CORS_ALLOW_ORIGINS`. Also add `DOMAIN=<your hostname>` (point its DNS A record at the instance's public IP first; Caddy needs it to get a certificate).
 5. **Ship the code to the instance** (`scp`/`rsync` the repo, or `git clone` if pushed to a remote), then on the VM:
    ```bash
    pip install -r requirements.txt   # or run these two steps in a venv
-   WAREHOUSE_BACKEND=oracle python scripts/seed_warehouse.py   # loads synthetic data into ADB
+   # one-time, as the table owner (inline ADMIN creds; never put them in .env):
+   WAREHOUSE_BACKEND=oracle ORACLE_USER=ADMIN ORACLE_PASSWORD=... ORACLE_CONNECT_STRING=...      python scripts/seed_warehouse.py                          # loads synthetic data into ADB
+   WAREHOUSE_BACKEND=oracle ORACLE_USER=ADMIN ORACLE_PASSWORD=... ORACLE_CONNECT_STRING=...      APP_DB_USER=RECO_APP APP_DB_PASSWORD=... python scripts/create_app_user.py   # SELECT-only runtime user
    WAREHOUSE_BACKEND=oracle python models/train.py             # trains ALS against real ADB data
    docker compose up -d --build   # app (internal only) + Caddy TLS proxy on 80/443
    ```

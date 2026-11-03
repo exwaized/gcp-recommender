@@ -18,17 +18,16 @@ from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from models.train import load_model, CollaborativeFilteringModel
 from data.warehouse import query_warehouse, paginate_clause, backend_name
 from monitoring.logger import StructuredLogger
-from monitoring.metrics import MetricsCollector
+from monitoring import metrics
 
 log = StructuredLogger("api")
-metrics = MetricsCollector()
 
 # CORS is closed by default. Set CORS_ALLOW_ORIGINS to a comma-separated list
 # (e.g. "https://app.example.com,http://localhost:5173"); "*" must be asked for
@@ -105,14 +104,19 @@ class PredictRequest(BaseModel):
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
-    latency_ms = round((time.perf_counter() - start) * 1000, 2)
-    log.info("request", method=request.method, path=request.url.path,
-             status=response.status_code, latency_ms=latency_ms)
-    metrics.record("request_latency_ms", latency_ms, {
-        "path": request.url.path, "method": request.method, "status": response.status_code
-    })
-    return response
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        elapsed = time.perf_counter() - start
+        # Route template, not the raw URL, so /users/<id> doesn't create a series per user.
+        route = request.scope.get("route")
+        path = route.path if route else "unmatched"
+        log.info("request", method=request.method, path=request.url.path,
+                 status=status, latency_ms=round(elapsed * 1000, 2))
+        metrics.observe_request(request.method, path, status, elapsed)
 
 # ---- Health & Status ----
 @app.get("/health")
@@ -127,11 +131,8 @@ def health():
 
 @app.get("/metrics", dependencies=[Depends(require_api_key)])
 def get_metrics():
-    """Cloud Monitoring-equivalent read path: recent samples + a rollup of request latency."""
-    return {
-        "request_latency_ms": metrics.get_summary("request_latency_ms"),
-        "recent": metrics.get_all_metrics()
-    }
+    """Prometheus text exposition format."""
+    return Response(metrics.render(), media_type=metrics.CONTENT_TYPE)
 
 @app.get("/model/info", dependencies=[Depends(require_api_key)])
 def model_info():

@@ -44,7 +44,7 @@ API key fields at the top; the key lives in memory only and is never stored in t
 | `/similar-items` | POST | Item-to-item similarity |
 | `/predict` | POST | Vertex AI-compatible batch prediction |
 | `/analytics/summary` | GET | Dataset statistics |
-| `/metrics` | GET | Request latency rollup + recent samples (Cloud Monitoring-equivalent) |
+| `/metrics` | GET | Prometheus metrics (request count + latency histogram; needs `X-API-Key`) |
 | `/model/info` | GET | MLflow registry entry |
 | `/docs` | GET | Auto-generated Swagger UI |
 

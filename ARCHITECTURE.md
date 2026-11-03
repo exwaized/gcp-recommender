@@ -184,7 +184,7 @@ the structured logger.
 | `GET /users/{id}` | One user's profile joined against their last 20 interactions. |
 | `GET /items` | Item catalog, optionally filtered by `category`. |
 | `GET /analytics/summary` | Row counts plus top-5 categories and event-type breakdown — small aggregate queries run on demand, not materialized. |
-| `GET /metrics` | Cloud Monitoring-equivalent read path — a rollup of `request_latency_ms` plus the last 200 raw samples. |
+| `GET /metrics` | Prometheus text exposition (request count + latency histogram, labelled by route template). Requires `X-API-Key`. |
 
 **The `/predict` contract exists on purpose.** Nothing calls it as a Vertex
 AI endpoint today — but shaping it identically to Vertex AI's
@@ -206,13 +206,14 @@ stdout agent auto-parses — the comment in the file says the swap is
 `google.cloud.logging.Client().setup_logging()`, and nothing else would
 need to change.
 
-**`MetricsCollector`.** A SQLite-backed counter/latency store
-(`monitoring/metrics.db`) with `.record()` and `.get_summary()`, shaped
-after Cloud Monitoring's custom-metric API. The same request middleware now
-calls `metrics.record("request_latency_ms", ...)` on every response, and
-`GET /metrics` exposes a rollup plus the last 200 raw samples — see
-[Known gaps](#10-known-gaps--whats-incidental-not-deliberate) for the
-retention caveat that comes with it.
+**Prometheus metrics.** `monitoring/metrics.py` holds in-memory
+`prometheus_client` counters and histograms (`http_requests_total`,
+`http_request_duration_seconds`) on a dedicated registry — no disk I/O on the
+request path. The request middleware records every response, labelled by
+route template (so `/users/{user_id}`, not one series per user), and
+`GET /metrics` serves the Prometheus text format for a scraper. Counters are
+per-process: run one worker per container, or enable prometheus_client's
+multiprocess mode.
 
 ---
 
@@ -361,8 +362,8 @@ These five were flagged in an earlier pass of this document and have since
 been fixed in the code:
 
 - **Metrics collector wasn't called anywhere** → `MetricsCollector` is now
-  instantiated in `api/main.py` and recorded to from the request-logging
-  middleware; `GET /metrics` exposes it. See
+  wired into the request-logging middleware in `api/main.py` (since replaced
+  by in-memory Prometheus metrics); `GET /metrics` exposes it. See
   [Monitoring & observability](#7-monitoring--observability--both-pieces-wired-in).
 - **Two copies of the same model class** → `models/collaborative_filtering.py`
   was dead code (nothing imported it) and has been deleted. `train.py`'s
@@ -387,10 +388,9 @@ been fixed in the code:
   fixed here, since nothing in the codebase treats it as more than
   informational (`load_model()` reconstructs the path itself rather than
   reading this field).
-- **Neither the metrics table nor the registry history prunes itself.**
-  `monitoring/metrics.db` grows by one row per request forever, and every
+- **The registry history doesn't prune itself.** Every
   training run appends to `model_registry.json`'s `history` array with no
   cap. Both are fine at demo scale — training happens on demand, not on a
   schedule, and `get_summary()`/`get_all_metrics()` already cap what they
   *read* back — but a long-running deployment would eventually want a
-  retention policy on both.
+  retention policy on it.

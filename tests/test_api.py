@@ -66,3 +66,16 @@ def test_cors_closed_by_default(client):
     r = client.options("/recommend", headers={
         "Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_metrics_prometheus_format_and_bounded_labels(client, auth):
+    client.get("/users/U0001", headers=auth)
+    client.get("/users/NOPE", headers=auth)
+    r = client.get("/metrics", headers=auth)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+    assert "http_requests_total" in body and "http_request_duration_seconds_bucket" in body
+    # route template, never the raw per-user URL
+    assert 'path="/users/{user_id}"' in body
+    assert "NOPE" not in body

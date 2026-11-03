@@ -390,7 +390,6 @@ been fixed in the code:
   reading this field).
 - **The registry history doesn't prune itself.** Every
   training run appends to `model_registry.json`'s `history` array with no
-  cap. Both are fine at demo scale — training happens on demand, not on a
-  schedule, and `get_summary()`/`get_all_metrics()` already cap what they
-  *read* back — but a long-running deployment would eventually want a
+  cap. Fine at demo scale — training happens on demand, not on a
+  schedule — but a long-running deployment would eventually want a
   retention policy on it.

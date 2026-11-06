@@ -8,7 +8,6 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
-import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from data.warehouse import query_warehouse
@@ -18,7 +17,6 @@ log = logging.getLogger(__name__)
 
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY_PATH = os.path.join(MODEL_DIR, "model_registry.json")
-mlflow.set_tracking_uri(pathlib.Path(MODEL_DIR, "mlruns").as_uri())
 
 EVENT_WEIGHTS = {"purchase": 5.0, "add_to_cart": 2.0, "view": 0.5}
 
@@ -205,6 +203,10 @@ def _archive_previous_registry(registry_path):
 
 
 def train_and_register():
+    # mlflow is a training-only dependency (requirements-train.txt); importing it
+    # here keeps it out of the serving image, which only needs load_model().
+    import mlflow
+    mlflow.set_tracking_uri(pathlib.Path(MODEL_DIR, "mlruns").as_uri())
     log.info("Loading data from warehouse...")
     interactions = query_warehouse("SELECT * FROM interactions")
     items = query_warehouse("SELECT * FROM items")

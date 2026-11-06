@@ -1,0 +1,3 @@
+# Training pipeline (models/train.py): serving deps + MLflow tracking.
+-r requirements.txt
+mlflow==3.18.0

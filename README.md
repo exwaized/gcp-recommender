@@ -19,7 +19,7 @@ SQLite              ALS Matrix            FastAPI               Structured JSON
 
 ```bash
 # Install
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # Run everything
 python run_pipeline.py
@@ -70,7 +70,7 @@ doesn't require a billing account — but the swap points are the same idea:
 4. **Get DB connection info**: in the console, open the Autonomous Database → DB Connection → TLS tab (not the wallet/mTLS tab) and copy the connect descriptor into `ORACLE_CONNECT_STRING`. Copy `.env.example` to `.env` and fill in `ORACLE_CONNECT_STRING` and the runtime user (`ORACLE_USER=RECO_APP`, `ORACLE_PASSWORD`, `ORACLE_SCHEMA=ADMIN`; created in step 5, not `ADMIN`), plus `API_KEY` and `CORS_ALLOW_ORIGINS`. Also add `DOMAIN=<your hostname>` (point its DNS A record at the instance's public IP first; Caddy needs it to get a certificate).
 5. **Ship the code to the instance** (`scp`/`rsync` the repo, or `git clone` if pushed to a remote), then on the VM:
    ```bash
-   pip install -r requirements.txt   # or run these two steps in a venv
+   pip install -r requirements-train.txt   # or run these two steps in a venv
    # one-time, as the table owner (inline ADMIN creds; never put them in .env):
    WAREHOUSE_BACKEND=oracle ORACLE_USER=ADMIN ORACLE_PASSWORD=... ORACLE_CONNECT_STRING=...      python scripts/seed_warehouse.py                          # loads synthetic data into ADB
    WAREHOUSE_BACKEND=oracle ORACLE_USER=ADMIN ORACLE_PASSWORD=... ORACLE_CONNECT_STRING=...      APP_DB_USER=RECO_APP APP_DB_PASSWORD=... python scripts/create_app_user.py   # SELECT-only runtime user
@@ -103,6 +103,6 @@ gcp-recommender/
 ├── dashboard/
 │   └── Dashboard.jsx        # React live demo dashboard
 ├── Dockerfile               # Cloud Run deployment
-├── requirements.txt
+├── requirements.txt         # serving deps (Docker); -train / -dev add MLflow / tests
 └── run_pipeline.py          # One-command orchestration
 ```

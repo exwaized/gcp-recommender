@@ -26,6 +26,7 @@ from models.train import load_model, CollaborativeFilteringModel
 from data.warehouse import query_warehouse, paginate_clause, backend_name
 from monitoring.logger import StructuredLogger
 from monitoring import metrics
+from api.ratelimit import RateLimiter
 
 log = StructuredLogger("api")
 
@@ -43,8 +44,26 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 MAX_N = 100
 MAX_LIMIT = 200
 
+# Per-client request cap (requests/minute, 0 = off). Applied before the key check so
+# it also throttles key-guessing. Behind a reverse proxy set TRUST_PROXY=1 so the
+# client is the first X-Forwarded-For hop (Caddy sets it); otherwise every request
+# would appear to come from the proxy's address.
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "120"))
+TRUST_PROXY = os.getenv("TRUST_PROXY") == "1"
+limiter = RateLimiter(RATE_LIMIT_PER_MIN)
 
-def require_api_key(key: Optional[str] = Depends(_api_key_header)):
+
+def _client_id(request: Request) -> str:
+    if TRUST_PROXY:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def require_api_key(request: Request, key: Optional[str] = Depends(_api_key_header)):
+    if not limiter.allow(_client_id(request)):
+        raise HTTPException(429, "Rate limit exceeded", headers={"Retry-After": "60"})
     if AUTH_DISABLED:
         return
     if not API_KEY:
@@ -55,6 +74,16 @@ def require_api_key(key: Optional[str] = Depends(_api_key_header)):
 
 # ---- Global model state ----
 model: Optional[CollaborativeFilteringModel] = None
+REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "../models/model_registry.json")
+
+
+def _model_version() -> Optional[str]:
+    try:
+        with open(REGISTRY_PATH) as f:
+            return json.load(f).get("run_id")
+    except (OSError, ValueError):
+        return None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -125,6 +154,7 @@ def health():
         "status": "healthy" if model else "degraded",
         "model_loaded": model is not None,
         "warehouse_backend": backend_name(),
+        "model_version": _model_version() if model else None,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     return JSONResponse(body, status_code=200 if model else 503)
@@ -136,11 +166,27 @@ def get_metrics():
 
 @app.get("/model/info", dependencies=[Depends(require_api_key)])
 def model_info():
-    registry_path = os.path.join(os.path.dirname(__file__), "../models/model_registry.json")
-    if os.path.exists(registry_path):
-        with open(registry_path) as f:
+    if os.path.exists(REGISTRY_PATH):
+        with open(REGISTRY_PATH) as f:
             return json.load(f)
     return {"status": "no registry found"}
+
+@app.post("/admin/reload-model", dependencies=[Depends(require_api_key)])
+def reload_model():
+    """Hot-swap the in-memory model after retraining, without restarting the process.
+    The new model is fully loaded before the swap; on failure the current one keeps serving."""
+    global model
+    try:
+        new_model = load_model()
+    except FileNotFoundError:
+        raise HTTPException(404, "No trained model found")
+    except Exception as e:
+        log.error("reload", message="Model reload failed", error=str(e))
+        raise HTTPException(500, "Model reload failed; previous model still serving")
+    model = new_model
+    log.info("reload", message="Model reloaded", model_version=_model_version())
+    return {"status": "reloaded", "model_version": _model_version(),
+            "users_indexed": len(new_model.user_index), "items_indexed": len(new_model.item_index)}
 
 # ---- Prediction Endpoints ----
 @app.post("/recommend", dependencies=[Depends(require_api_key)])

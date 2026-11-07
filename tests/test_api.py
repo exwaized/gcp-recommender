@@ -79,3 +79,29 @@ def test_metrics_prometheus_format_and_bounded_labels(client, auth):
     # route template, never the raw per-user URL
     assert 'path="/users/{user_id}"' in body
     assert "NOPE" not in body
+
+
+def test_rate_limit_returns_429(client, auth, monkeypatch):
+    monkeypatch.setattr(main, "limiter", main.RateLimiter(3))
+    codes = [client.get("/users?limit=1", headers=auth).status_code for _ in range(5)]
+    assert codes[:3] == [200, 200, 200] and codes[3:] == [429, 429]
+
+
+def test_rate_limit_also_throttles_bad_keys(client, monkeypatch):
+    monkeypatch.setattr(main, "limiter", main.RateLimiter(2))
+    codes = [client.get("/users", headers={"X-API-Key": "guess"}).status_code for _ in range(4)]
+    assert codes == [401, 401, 429, 429]
+
+
+def test_rate_limiter_window_resets():
+    from api.ratelimit import RateLimiter
+    rl = RateLimiter(1, window_s=10)
+    assert rl.allow("a", now=0) and not rl.allow("a", now=5) and rl.allow("a", now=10.1)
+    assert rl.allow("b", now=5)  # separate key
+
+
+def test_reload_model_requires_key_and_swaps(client, auth):
+    assert client.post("/admin/reload-model").status_code == 401
+    r = client.post("/admin/reload-model", headers=auth)
+    assert r.status_code == 200 and r.json()["status"] == "reloaded"
+    assert client.get("/health").json()["model_loaded"] is True

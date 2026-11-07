@@ -22,6 +22,7 @@ def warehouse():
 def client(warehouse, monkeypatch):
     monkeypatch.setattr(main, "API_KEY", "test-key")
     monkeypatch.setattr(main, "AUTH_DISABLED", False)
+    monkeypatch.setattr(main, "limiter", main.RateLimiter(0))  # tests opt in to rate limiting
     with TestClient(main.app) as c:
         yield c
 

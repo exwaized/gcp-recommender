@@ -6,6 +6,7 @@ services:
     env_file: .env
     environment:
       WAREHOUSE_BACKEND: oracle
+      TRUST_PROXY: "1"
     volumes:
       - ./models/saved_model:/app/models/saved_model:ro
     expose:

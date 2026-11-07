@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+*.npy binary
+*.pkl binary
+*.joblib binary
+*.db binary

@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY_PATH = os.path.join(MODEL_DIR, "model_registry.json")
 
+EXPERIMENT_NAME = "gcp-recommender"
 EVENT_WEIGHTS = {"purchase": 5.0, "add_to_cart": 2.0, "view": 0.5}
 
 
@@ -206,7 +207,13 @@ def train_and_register():
     # mlflow is a training-only dependency (requirements-train.txt); importing it
     # here keeps it out of the serving image, which only needs load_model().
     import mlflow
-    mlflow.set_tracking_uri(pathlib.Path(MODEL_DIR, "mlruns").as_uri())
+    # MLflow 3.x no longer accepts the ./mlruns file store; use a local SQLite backend,
+    # with artifacts kept next to it.
+    mlflow.set_tracking_uri("sqlite:///" + pathlib.Path(MODEL_DIR, "mlflow.db").as_posix())
+    if mlflow.get_experiment_by_name(EXPERIMENT_NAME) is None:
+        mlflow.create_experiment(EXPERIMENT_NAME,
+                                 artifact_location=pathlib.Path(MODEL_DIR, "mlartifacts").as_uri())
+    mlflow.set_experiment(EXPERIMENT_NAME)
     log.info("Loading data from warehouse...")
     interactions = query_warehouse("SELECT * FROM interactions")
     items = query_warehouse("SELECT * FROM items")

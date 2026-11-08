@@ -9,6 +9,8 @@ monitoring/metrics.db
 .understand-anything/
 data/warehouse.db
 models/mlruns/
+models/mlflow.db
+models/mlartifacts/
 models/*.pkl
 models/*.joblib
 .pytest_cache/

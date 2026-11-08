@@ -8,6 +8,8 @@ wallet
 **/__pycache__
 *.pyc
 models/mlruns
+models/mlflow.db
+models/mlartifacts
 models/*.pkl
 models/*.joblib
 data/warehouse.db
